@@ -1,0 +1,380 @@
+initialize() {
+	
+	if (exists("slimgui")==1){
+		defineConstant("runNumber", 1);
+	}
+	
+	defineConstant("map", "unlinked");	// "unlinked" or "Human" or "Dmel" (Drosophila melanogaster)
+	
+	defineConstant("mapFolder", "/Users/Who/folderWhereLinkageMapsAre/");
+//	defineConstant("resultsFolder", "/Users/Who/folderToWhereResultsShouldBeWritten/");
+defineConstant("resultsFolder", "~/Desktop/");
+	
+	
+	// Define results files
+	defineConstant("introgFile", resultsFolder+"introgTraj"+runNumber+".csv");
+	defineConstant("introgFileCausal", resultsFolder+"introgTrajCausal"+runNumber+".csv");
+	defineConstant("preAdmixMeansFile", resultsFolder+"preAdmixMeans"+runNumber+".csv");
+	defineConstant("genicVarsFile", resultsFolder+"genicVars"+runNumber+".csv");
+	defineConstant("genicVarsFile_check", resultsFolder+"genicVars_check"+runNumber+".csv");
+	defineConstant("geneticVarsFile", resultsFolder+"geneticVars"+runNumber+".csv");
+	defineConstant("FSTsFile", resultsFolder+"FSTs"+runNumber+".csv");
+	defineConstant("AncestriesFile", resultsFolder+"Ancestries"+runNumber+".csv");
+	defineConstant("AncestriesCausalFile", resultsFolder+"AncestriesCausal"+runNumber+".csv");
+	defineConstant("FitnessesFile", resultsFolder+"Fitnesses"+runNumber+".csv");
+	defineConstant("TraitValsFile", resultsFolder+"TraitVals"+runNumber+".csv");
+	defineConstant("SegSitesFile", resultsFolder+"SegSites"+runNumber+".csv");
+	
+	
+	defineConstant("N", 1000);	// size of populations
+	
+	defineConstant("VS_Vg", 4);	// strength of selection, relative to genic variance of source pops
+	
+	defineConstant("Fwant", 0.2);	// Desired value of FST between source pops
+	defineConstant("Fbeta", 2*Fwant/(1+Fwant)); // "F" value in Balding-Nichols to get FST of Fwant
+	// This defines FST as E[het loss from subdivision]/E[het], not E[het loss from subdivision/het].
+	
+	defineConstant("theta", 0.2);	// minor-ancestry fraction in initial admixed pop
+	
+	defineConstant("Ls", 1000);	// number of trait-affecting loci, multiple of 2 please
+	defineConstant("L", 10000);	//  overall number of loci, multiple of Ls please
+	defineConstant("L_Ls", asInteger(L/Ls));
+	
+	defineConstant("loci_sel", asInteger(floor((L/Ls)/2)+L_Ls*(0:(Ls-1)))); // indices of selected loci (note, "floor" and "round" do not work with integer-type arguments)
+	
+	defineConstant("MAFmin", 0.2); // min minor-allele freq in ancestral pop
+	defineConstant("MAFmax", 0.2); // max minor-allele freq in ancestral pop
+	defineConstant("MAFave", (MAFmin+MAFmax)/2); // average minor-allele freq in ancestral pop
+	
+	defineConstant("pAnc", runif(asInteger(Ls/2), MAFmin, MAFmax));
+	// ancestral MAFs at half the loci; will be identical at the other half
+	
+	defineConstant("a", pAnc*(1-Fbeta)/Fbeta);		// parms of beta dist that we will indep.
+	defineConstant("b", (1-pAnc)*(1-Fbeta)/Fbeta);	// draw pop 1 & 2 allele freqs from
+																	// to achieve mean FST of Fwant
+	
+	// Now draw allele freqs for the two populations at half of the trait-affecting loci, and check that they (i) don't imply a large difference in the genic variances of the two pops, and (ii) imply an FST value close to the desired value Fwant. Allele freqs at the other half of the trait-affecting loci will be, within each pop, identical to those at the first half of loci, but with the sign of effect of the alleles flipped. This ensures a mean trait value in each population of 0, so that there is no directional selection upon admixture.
+	
+	Vg_tol = 0.005; // max percentage diff in the two pops' genic variances that we tolerate
+	FST_tol = 0.005; // max percentage deviation from target value of FST that we tolerate
+	
+	VgsClose = 100;
+	FSTClose = 100;	// variables to track whether we're within tolerable distance
+	
+	tries = 0;
+	
+	while (asInteger(VgsClose>Vg_tol)+asInteger(FSTClose>FST_tol)>0){
+		
+		tries = tries+1;
+		
+		trialFreqs1 = rbeta(asInteger(Ls/2), a, b);	// candidate allele freqs in pops 1 and 2
+		trialFreqs2 = rbeta(asInteger(Ls/2), a, b); // from Balding-Nichols sampling
+		
+		Vg1 = 2*sum(2*trialFreqs1*(1-trialFreqs1));
+		Vg2 = 2*sum(2*trialFreqs2*(1-trialFreqs2)); // implied genic variances of pops 1 and 2
+		VgsClose = abs((Vg1-Vg2)/(0.5*(Vg1+Vg2)));  // proportionate diff between pops 1 and 2
+		
+		pave_thisDraw = (trialFreqs1+trialFreqs2)/2;
+		hetAcross = sum(2*pave_thisDraw*(1-pave_thisDraw));
+		het1 = sum(2*trialFreqs1*(1-trialFreqs1));
+		het2 = sum(2*trialFreqs2*(1-trialFreqs2));
+		FSTthisDraw = (hetAcross-0.5*(het1+het2))/hetAcross;
+		FSTClose = abs((FSTthisDraw-Fwant)/Fwant); // proportionate deevistion from desired FST value
+	}
+	catn("no. Balding-Nichols draws: " +tries);
+	
+	defineConstant("pTemp1", trialFreqs1);
+	defineConstant("pTemp2", trialFreqs2);
+	
+	defineConstant("MAFs1", c(pTemp1, (1-pTemp1))); // allele freqs
+	defineConstant("MAFs2", c(pTemp2, (1-pTemp2))); // not necessarily *minor* allele freqs
+	
+	defineConstant("effects_unpermuted", ( 4*( (0:(Ls-1))/2 - floor( (0:(Ls-1))/2 ) ) -1  ) );
+	// -1, +1, -1, +1, ...
+	// to designate whether the allele freq drawn at locus l is for the trait-increasing allele (if l is even) or the trait-decreasing allele (if l is odd)
+	
+	defineConstant("pPop1_unpermuted", 0.5 - 0.5*(1-2*MAFs1)*effects_unpermuted);
+	defineConstant("pPop2_unpermuted", 0.5 - 0.5*(1-2*MAFs2)*effects_unpermuted);
+	// = MAFs1[i] if effects_unpermuted = +1;   = 1- MAFs1[i] if effects_unpermuted = -1
+	// frequencies of the trait-increasing alleles in the two pops (so we don't need to remember +ve and -ve effects)
+	
+	defineConstant("permute", sample(0:(Ls-1), Ls)); // random permutation of the list 0,1,...,Ls-1
+	// so that freqs, effects, etc. are random wrt the recombination map
+	
+	defineConstant("pPop1", pPop1_unpermuted[permute]);
+	defineConstant("pPop2", pPop2_unpermuted[permute]);
+	defineConstant("effects", effects_unpermuted[permute]);
+	
+	pOverall = (pPop1 + pPop2)/2;
+	hetOverall = 2*pOverall*(1-pOverall);
+	het1 = 2*pPop1*(1-pPop1);
+	het2 = 2*pPop2*(1-pPop2);
+	
+	numerator = hetOverall - (het1+het2)/2;
+	denominator = hetOverall;
+	
+	FST_E_frac = mean(numerator/denominator); // FST not by the def we want
+	FST_frac_E = mean(numerator)/mean(denominator); // FST by the def we want
+	
+	// writeFile(FSTsFile, ""+FST_E_frac, append=T);
+	writeFile(FSTsFile, ""+FST_frac_E, append=T);
+	
+	Vg1 = sum(2*pPop1*(1-pPop1));
+	Vg2 = sum(2*pPop2*(1-pPop2));
+	
+	writeFile(genicVarsFile, ""+Vg1, append=T);
+	writeFile(genicVarsFile, ""+Vg2, append=T);
+	pAd = (1-theta)*pPop1 + theta*pPop2; // expected genic variance in admixed pop
+	writeFile(genicVarsFile, ""+sum(2*pAd*(1-pAd)), append=T);
+	
+	Vg_ave = (Vg1+Vg2)/2;
+	
+	defineConstant("VS", VS_Vg*Vg_ave);	// strength of selection
+	defineConstant("sd_VS", sqrt(VS));
+	
+	
+	initializeMutationRate(0);
+	initializeMutationType("m1", 0.5, "f", 1.0);	// trait-increasing alleles
+	m1.convertToSubstitution = F;
+	
+	initializeMutationType("m2", 0.5, "f", 0.0);	// ancestry tracker at all loci
+	m2.convertToSubstitution = F;
+	
+	initializeMutationType("m3", 0.5, "f", 0.0);	// ancestry tracker at causal loci
+	m3.convertToSubstitution = F;
+	
+	initializeGenomicElementType("g1", c(m1, m2, m3), c(1.0, 1.0, 1.0));
+	initializeGenomicElement(g1, 0, L-1);
+	
+	initializeSex("A");
+	
+	// input recombination rates
+	if (map == "Human")
+	{
+	
+	// input male recombination
+	lines = readFile(mapFolder + "linkageMapForSLiM_Human_Male_10kLoci.txt");
+	rates = NULL;
+	for (line in lines)
+	{
+		components = strsplit(line, "\t");
+		rates = c(rates, asFloat(components[0]));
+	}
+	initializeRecombinationRate(rates, 1:(L-1), sex="M");
+	
+	// input female recombination
+	lines = readFile(mapFolder + "linkageMapForSLiM_Human_Female_10kLoci.txt");
+	rates = NULL;
+	for (line in lines)
+	{
+		components = strsplit(line, "\t");
+		rates = c(rates, asFloat(components[0]));
+	}
+	initializeRecombinationRate(rates, 1:(L-1), sex="F");
+	
+	}
+	
+	if (map == "Dmel")
+	{
+	
+	// input male recombination
+	lines = readFile(mapFolder + "linkageMapForSLiM_Dmel_Male_10kLoci.txt");
+	rates = NULL;
+	for (line in lines)
+	{
+		components = strsplit(line, "\t");
+		rates = c(rates, asFloat(components[0]));
+	}
+	initializeRecombinationRate(rates, 1:(L-1), sex="M");
+	
+	// input female recombination
+	lines = readFile(mapFolder + "linkageMapForSLiM_Dmel_Female_10kLoci.txt");
+	rates = NULL;
+	for (line in lines)
+	{
+		components = strsplit(line, "\t");
+		rates = c(rates, asFloat(components[0]));
+	}
+	initializeRecombinationRate(rates, 1:(L-1), sex="F");
+	
+	}
+	
+	if (map == "unlinked")
+	{
+	
+	initializeRecombinationRate(0.5);
+	
+	}
+
+}
+
+
+
+mutationEffect(m1) {return 1.0;}
+//this makes the m1 alleles neutral; their selective coefficients are simply 
+//being stored so we can use them as phenotypic effects instead
+
+
+
+1 early() {
+	sim.addSubpop("p1", N);
+	sim.addSubpop("p2", N);	// parent populations of soon-to-be-created admixed population p3
+}
+
+
+1 late() {
+	
+	pop1_inds = p1.individuals;
+	pop2_inds = p2.individuals;
+	
+	for (locus in 0:(Ls-1)){
+		
+		// within each pop, assign trait-increasing allele at each locus randomly according to its frequency
+		num_genomes_p1 = asInteger(round(2*N*pPop1[locus]));
+		num_genomes_p2 = asInteger(round(2*N*pPop2[locus]));
+		
+		target_genomes_p1 = sample(pop1_inds.genomes, num_genomes_p1, replace = F);
+		target_genomes_p2 = sample(pop2_inds.genomes, num_genomes_p2, replace = F);
+		
+		if (num_genomes_p1 > 0)
+		{
+			new_mut = target_genomes_p1.addNewDrawnMutation(m1, loci_sel[locus]);
+			target_genomes_p2.addMutations(new_mut); // Keeps the same mutation identity as the mutations added to target_genomes_p1, and by default is at the same locus. Will be useful when we want to use sim.mutationFrequencies
+		}
+		else
+		{
+			target_genomes_p2.addNewDrawnMutation(m1, loci_sel[locus]);
+		}
+	
+	}
+
+}
+
+
+// Allow 20 generation burnin for pops to establish long-range LD (Bulmer effect); their genetic variances will decline due to this LD, but their genic variances will be ~unchanged, because allele freqs will be ~unchanged
+20 early() {
+	
+	
+	// ADD ANCESTRY-TRACKING MUTATIONS TO ALL POP 2 INDIVIDUALS
+	pop1_inds = p1.individuals;
+	pop2_inds = p2.individuals;
+	
+	pop2_inds.genome1.addNewDrawnMutation(m2, 0:(L-1));
+	pop2_inds.genome2.addNewDrawnMutation(m2, 0:(L-1)); // pop-2 ancestry tracking "mutations" at all loci
+	
+	pop2_inds.genome1.addNewDrawnMutation(m3, loci_sel);
+	pop2_inds.genome2.addNewDrawnMutation(m3, loci_sel); // pop-2 ancestry tracking "mutations" at trait-affecting loci
+	
+	// CALCLUATE FST JUST BEFORE ADMIXTURE
+	
+	freqs1 = sim.mutationFrequencies(p1, sim.mutationsOfType(m1));
+	freqs2 = sim.mutationFrequencies(p2, sim.mutationsOfType(m1));
+	
+	freqs_ave = (freqs1+freqs2)/2;
+	
+	numerator = freqs_ave*(1-freqs_ave) - 0.5*(freqs1*(1-freqs1) + freqs2*(1-freqs2));
+	denominator = freqs_ave*(1-freqs_ave);
+	
+	FST_before_admix = sum(numerator)/sum(denominator);
+	
+	writeFile(FSTsFile, ""+FST_before_admix, append=T);
+	
+	// GENIC AND GENETIC VARIANCES OF TWO POPS
+	
+	genic1_before_admix = sum(2*freqs1*(1-freqs1));
+	genic2_before_admix = sum(2*freqs2*(1-freqs2));
+	
+	writeFile(genicVarsFile, ""+genic1_before_admix, append=T);
+	writeFile(genicVarsFile, ""+genic2_before_admix, append=T);
+	
+	p1_phenotypes = pop1_inds.countOfMutationsOfType(m1) -Ls;
+	genetic1_before_admix = var(p1_phenotypes);
+	mean1_before_admix = mean(p1_phenotypes);
+	
+	p2_phenotypes = pop2_inds.countOfMutationsOfType(m1) -Ls;
+	genetic2_before_admix = var(p2_phenotypes);
+	mean2_before_admix = mean(p2_phenotypes);
+	
+	writeFile(geneticVarsFile, ""+genetic1_before_admix, append=T);
+	writeFile(geneticVarsFile, ""+genetic2_before_admix, append=T);
+	
+	writeFile(preAdmixMeansFile, ""+mean1_before_admix, append=T);
+	writeFile(preAdmixMeansFile, ""+mean2_before_admix, append=T);
+	
+	
+	
+	// CREATE ADMIXED POP
+	
+	sim.addSubpop("p3", N);
+	p3.setMigrationRates(c(p1, p2), c(1-theta, theta));
+}
+
+20 late() {
+	// remove the source subpopulations
+	p3.setMigrationRates(c(p1, p2), c(0.0, 0.0));
+	p1.setSubpopulationSize(0);
+	p2.setSubpopulationSize(0);
+	//for the mutations to move from p1 and p2 to p3 properly, the removal of these populations has to happen in the late event after the early migration event not in the early even itself
+}
+
+
+
+
+20: late(){
+	
+	inds = p3.individuals;
+	
+	p3_phenotypes = inds.countOfMutationsOfType(m1) -Ls; // under the model we have specified, phenotype of each individual = #trait-increasing alleles - #loci
+	fitnesses = exp(-p3_phenotypes^2/(2*VS)); // relative fitnesses of individuals, under regime of stabilizing selection with optimal value 0 and inverse strength of selection VS
+	
+	avg_phenotype_p3 = mean(p3_phenotypes);
+	var_phenotype_p3 = var(p3_phenotypes);
+	
+	writeFile(geneticVarsFile, ""+var_phenotype_p3, append=T);
+	
+	p3_ancestries_all = 	inds.countOfMutationsOfType(m2)/(2*L);
+	p3_ancestries_causal = inds.countOfMutationsOfType(m3)/(2*Ls); // ancestry fractions (prop of pop-2 ancestry) at all and at trait-affecting loci
+	
+	// to check distribution of ancestry in the early generations after admixture:
+	if(sim.cycle<25){
+		writeFile(AncestriesFile, ""+p3_ancestries_all, append=T);
+		writeFile(AncestriesCausalFile, ""+p3_ancestries_causal, append=T);
+		writeFile(TraitValsFile, ""+p3_phenotypes, append=T);
+		writeFile(FitnessesFile, ""+fitnesses, append=T);
+	}
+	
+	
+	causalFreqs = sim.mutationFrequencies(p3, sim.mutationsOfType(m1)); // freqs of trait-increasing alleles
+	writeFile(SegSitesFile, ""+length(causalFreqs), append=T);
+	
+	genicVar = sum(2*causalFreqs*(1-causalFreqs));
+	writeFile(genicVarsFile, ""+genicVar, append=T);
+	
+	
+	inds_introgressed = inds.countOfMutationsOfType(m2);
+	introgFrac = mean(inds_introgressed)/(2*L); // overall fraction of pop-2 ancestry
+	
+	inds_introgressed_causal = inds.countOfMutationsOfType(m3);
+	introgFrac_causal = mean(inds_introgressed_causal)/(2*Ls); //  fraction of pop-2 ancestry at trait-affecting sites
+	
+	writeFile(introgFile, ""+introgFrac, append=T);
+	writeFile(introgFileCausal, ""+introgFrac_causal, append=T);
+	
+
+}
+
+
+
+
+// assign fitnesses; this callback loops through individuals
+fitnessEffect(){
+	
+	phenotype = individual.countOfMutationsOfType(m1) - Ls; // present individual's trait value
+	
+	fitness = exp(-phenotype^2/(2*VS)); // their relative fitness under stabilizing selection, with optimum 0 and inverse strength of selection VS
+	
+	return fitness;
+
+}
+
+520 late() {sim.simulationFinished();}
